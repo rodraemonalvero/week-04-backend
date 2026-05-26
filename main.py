@@ -1,8 +1,14 @@
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from typing import Optional
+from fastapi import FastAPI, HTTPException, Depends
+from sqlalchemy.orm import Session
 
-app = FastAPI(title="Book Tracker API", version="1.0.0")
+from database import get_db, engine, Base
+from models import Book
+from schemas import BookCreate, BookUpdate, BookResponse
+
+# Create tables in the database if they do not exist yet
+Base.metadata.create_all(bind=engine)
+
+app = FastAPI(title="Book Tracker API", version="2.0.0")
 
 # Pydantic models for validation
 class BookCreate(BaseModel):
