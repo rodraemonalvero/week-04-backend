@@ -10,20 +10,6 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Book Tracker API", version="2.0.0")
 
-# Pydantic models for validation
-class BookCreate(BaseModel):
-    title: str
-    author: str
-    status: str = "want_to_read"  # "reading", "read", "want_to_read"
-    rating: Optional[int] = None  # 1-5, only if status is "read"
-
-class BookUpdate(BaseModel):
-    status: Optional[str] = None
-    rating: Optional[int] = None
-
-# In-memory storage
-books_db = []
-next_id = 1
 
 @app.get("/")
 def read_root():
@@ -33,11 +19,14 @@ def read_root():
 def health():
     return {"status": "ok"}
 
-@app.get("/books")
-def get_books(status: Optional[str] = None):
+@app.get("/books", response_model=list[BookResponse])
+def get_books(status: str | None = None, db: Session = Depends(get_db)):
+    query = db.query(Book)
+
     if status:
-        return [b for b in books_db if b["status"] == status]
-    return books_db
+        query = query.filter(Book.status == status)
+
+    return query.all()
 
 
 @app.get("/books/stats")
@@ -80,48 +69,53 @@ def get_stats():
     }
 
 
-@app.get("/books/{book_id}")
-def get_book(book_id: int):
-    for book in books_db:
-        if book["id"] == book_id:
-            return book
+@app.post("/books", response_model=BookResponse, status_code=201)
+def create_book(data: BookCreate, db: Session = Depends(get_db)):
+    book = Book(**data.model_dump())
 
-    raise HTTPException(status_code=404, detail="Book not found")
+    db.add(book)
+    db.commit()
+    db.refresh(book)
 
-
-@app.post("/books", status_code=201)
-def create_book(book: BookCreate):
-    global next_id
-
-    new_book = book.model_dump()
-    new_book["id"] = next_id
-
-    books_db.append(new_book)
-    next_id += 1
-
-    return new_book
+    return book
 
 
-@app.put("/books/{book_id}")
-def update_book(book_id: int, updates: BookUpdate):
-    for book in books_db:
-        if book["id"] == book_id:
-            if updates.status is not None:
-                book["status"] = updates.status
+@app.get("/books/{book_id}", response_model=BookResponse)
+def get_book(book_id: int, db: Session = Depends(get_db)):
+    book = db.query(Book).filter(Book.id == book_id).first()
 
-            if updates.rating is not None:
-                book["rating"] = updates.rating
+    if book is None:
+        raise HTTPException(status_code=404, detail="Book not found")
 
-            return book
+    return book
 
-    raise HTTPException(status_code=404, detail="Book not found")
+
+@app.put("/books/{book_id}", response_model=BookResponse)
+def update_book(book_id: int, updates: BookUpdate, db: Session = Depends(get_db)):
+    book = db.query(Book).filter(Book.id == book_id).first()
+
+    if book is None:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    update_data = updates.model_dump(exclude_unset=True)
+
+    for key, value in update_data.items():
+        setattr(book, key, value)
+
+    db.commit()
+    db.refresh(book)
+
+    return book
 
 
 @app.delete("/books/{book_id}")
-def delete_book(book_id: int):
-    for book in books_db:
-        if book["id"] == book_id:
-            books_db.remove(book)
-            return {"message": "Book deleted successfully"}
+def delete_book(book_id: int, db: Session = Depends(get_db)):
+    book = db.query(Book).filter(Book.id == book_id).first()
 
-    raise HTTPException(status_code=404, detail="Book not found")
+    if book is None:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    db.delete(book)
+    db.commit()
+
+    return {"message": "Book deleted successfully"}
